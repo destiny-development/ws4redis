@@ -146,7 +146,9 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-timeout.C:
 			// log.Println("timed-out", r.RemoteAddr, r.URL)
-			return
+			if heartbeats {
+				return
+			}
 		}
 	}
 }
