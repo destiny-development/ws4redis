@@ -24,12 +24,14 @@ const (
 )
 
 var (
-	port             int
-	host             string
-	redisAddr        string
-	redisDatabase    int64
-	redisNetwork     string = "tcp"
-	redisPrefix      string
+	port int
+	host string
+
+	redisAddr     string
+	redisDatabase int64
+	redisNetwork  string
+	redisPrefix   string
+
 	strictMode       bool
 	staticFacilities = map[string]bool{"launcher": true, "launcher-staff": true}
 	defaultFacility  = "launcher"
@@ -44,86 +46,6 @@ var upgrader = websocket.Upgrader{
 type Message []byte
 
 type MessageChan chan Message
-
-type Facility struct {
-	name    string
-	channel MessageChan
-	clients map[MessageChan]bool
-	l       sync.Locker
-}
-
-func NewFacility(name string) *Facility {
-	f := new(Facility)
-	f.channel = make(MessageChan)
-	f.clients = make(map[MessageChan]bool)
-	f.l = new(sync.Mutex)
-	f.name = name
-	go f.loop()
-	go f.redisLoop()
-	return f
-}
-
-func (f *Facility) broadcast(s Message) {
-	f.l.Lock()
-	for client := range f.clients {
-		client <- s
-	}
-	f.l.Unlock()
-}
-
-func (f *Facility) Broadcast(s Message) {
-	f.channel <- s
-}
-
-func (f *Facility) loop() {
-	for s := range f.channel {
-		f.broadcast(s)
-	}
-}
-
-func (f *Facility) listenRedis() error {
-	conn, err := redis.Dial(redisNetwork, redisAddr)
-	if err != nil {
-		return err
-	}
-	conn.Do("select", redisDatabase)
-	psc := redis.PubSubConn{conn}
-	k := strings.Join([]string{redisPrefix, facilityPrefix, f.name}, keySeparator)
-	log.Println("redis: listening to", k)
-	psc.Subscribe(k)
-	for {
-		switch v := psc.Receive().(type) {
-		case redis.Message:
-			f.Broadcast(v.Data)
-		case error:
-			return err
-		}
-	}
-}
-
-func (f *Facility) redisLoop() {
-	for {
-		if err := f.listenRedis(); err != nil {
-			log.Println("Redis error:", err)
-			time.Sleep(attemptWait)
-		}
-	}
-}
-
-func (f *Facility) Subscribe() (m MessageChan) {
-	m = make(MessageChan)
-	f.l.Lock()
-	f.clients[m] = true
-	f.l.Unlock()
-	return m
-}
-
-func (f *Facility) Unsubscibe(m MessageChan) {
-	f.l.Lock()
-	close(m)
-	delete(f.clients, m)
-	f.l.Unlock()
-}
 
 type Application struct {
 	facilities map[string]*Facility
@@ -171,7 +93,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// handling connection close/error
+	// closing connection and removing subscibtion after stop
 	go func() {
 		<-stop
 		conn.Close()
@@ -181,8 +103,8 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	// handling heartbeat
 	// listening until conn timedout/error/closed or heatbeat timeout
 	heartBeats := make(chan bool)
-	defer close(heartBeats)
 	go func() {
+		defer close(heartBeats)
 		for {
 			t, data, err := conn.ReadMessage()
 			if t != websocket.TextMessage {
@@ -201,17 +123,18 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 			heartBeats <- true
 		}
 	}()
+
+	// handling heartbeat timeouts and errors
 	for {
 		timeout := time.NewTimer(clientTimeOut)
 		select {
 		case _, ok := <-heartBeats:
 			if ok {
 				continue
-			} else {
-				return
 			}
+			break
 		case <-timeout.C:
-			return
+			break
 		}
 	}
 }
@@ -277,5 +200,7 @@ func main() {
 	http.HandleFunc("/", a.handler)
 	http.HandleFunc("/stat", a.stat)
 	listenOn := fmt.Sprintf("%s:%d", host, port)
+	log.Println("ws4redis", version)
+	log.Println("listening on", listenOn)
 	log.Fatal(http.ListenAndServe(listenOn, nil))
 }
