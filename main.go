@@ -16,12 +16,11 @@ import (
 )
 
 const (
-	version        = "1.0rc"
+	version        = "1.1-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	maxEchoSize    = 256
 	attemptWait    = time.Second * 1
-	clientTimeOut  = time.Second * 15
 )
 
 var (
@@ -35,8 +34,10 @@ var (
 
 	strictMode       bool
 	heartbeats       bool
+	scaleCPU         bool
 	staticFacilities = map[string]bool{"launcher": true, "launcher-staff": true}
 	defaultFacility  = "launcher"
+	clientTimeOut    = time.Second * 15
 )
 
 var upgrader = websocket.Upgrader{
@@ -207,12 +208,16 @@ func init() {
 	flag.StringVar(&redisPrefix, "redis-prefix", "ws", "Redis prefix")
 	flag.BoolVar(&strictMode, "strict", false, "Allow only white-listed facilities")
 	flag.BoolVar(&heartbeats, "heartbeats", false, "Use heartbeats")
+	flag.BoolVar(&scaleCPU, "scale", false, "Use all cpus")
+	flag.DurationVar(&clientTimeOut, "timeout", time.Second*15, "Heartbeat timeout")
 }
 
 func main() {
 	flag.Parse()
 	a := New()
-	runtime.GOMAXPROCS(runtime.NumCPU())
+	if scaleCPU {
+		runtime.GOMAXPROCS(runtime.NumCPU())
+	}
 	http.HandleFunc("/", a.handler)
 	http.HandleFunc("/stat", a.stat)
 	listenOn := fmt.Sprintf("%s:%d", host, port)
