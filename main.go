@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/garyburd/redigo/redis"
-	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -33,6 +34,7 @@ var (
 	redisPrefix   string
 
 	strictMode       bool
+	heartbeats       bool
 	staticFacilities = map[string]bool{"launcher": true, "launcher-staff": true}
 	defaultFacility  = "launcher"
 )
@@ -43,15 +45,19 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true }, // allow any origin
 }
 
+// Message is container for messages between server and clients
 type Message []byte
 
+// MessageChan is channel of messages
 type MessageChan chan Message
 
+// Application contains main logic
 type Application struct {
 	facilities map[string]*Facility
 	l          sync.Locker
 }
 
+// Facility creates, initializes and returns new facility with provided name
 func (a *Application) Facility(name string) (f *Facility) {
 	a.l.Lock()
 	defer a.l.Unlock()
@@ -64,6 +70,7 @@ func (a *Application) Facility(name string) (f *Facility) {
 	return f
 }
 
+// FacilityFromURL wraps Application.Facility
 func (a *Application) FacilityFromURL(u *url.URL) (f *Facility) {
 	name := getFacility(u)
 	if strictMode && !staticFacilities[name] {
@@ -81,6 +88,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	// log.Println("connected", r.RemoteAddr, r.URL)
 	f := a.FacilityFromURL(r.URL)
 	c := f.Subscribe()
 	stop := make(chan bool)
@@ -107,6 +115,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 		defer close(heartBeats)
 		for {
 			t, data, err := conn.ReadMessage()
+			// log.Println("got message", t, err)
 			if t != websocket.TextMessage {
 				return
 			}
@@ -120,6 +129,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 			if conn.WriteMessage(websocket.TextMessage, data) != nil {
 				return
 			}
+			// log.Println("heartbeat", r.RemoteAddr, r.URL)
 			heartBeats <- true
 		}
 	}()
@@ -132,9 +142,11 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 			if ok {
 				continue
 			}
-			break
+			// log.Println("disconnected", r.RemoteAddr, r.URL)
+			return
 		case <-timeout.C:
-			break
+			// log.Println("timed-out", r.RemoteAddr, r.URL)
+			return
 		}
 	}
 }
@@ -166,6 +178,7 @@ func (a Application) stat(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "\tHeapSys", mem.HeapSys)
 }
 
+// New creates and initializes new Application
 func New() *Application {
 	a := new(Application)
 
@@ -191,6 +204,7 @@ func init() {
 	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis addr")
 	flag.StringVar(&redisPrefix, "redis-prefix", "ws", "Redis prefix")
 	flag.BoolVar(&strictMode, "strict", false, "Allow only white-listed facilities")
+	flag.BoolVar(&heartbeats, "heartbeats", false, "Use heartbeats")
 }
 
 func main() {

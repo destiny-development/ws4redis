@@ -1,11 +1,12 @@
 package main
 
 import (
-	"github.com/garyburd/redigo/redis"
 	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
 )
 
 // Facility represents channel, which users can listen
@@ -35,10 +36,12 @@ func (f *Facility) loop() {
 	// for every message in channel
 	for s := range f.channel {
 		f.l.Lock()
+		log.Println("facility: got message; broadcasting")
 		// async broadcast to all clients of facility
 		for client := range f.clients {
 			client <- s
 		}
+		log.Println("facility: broadcast ended")
 		f.l.Unlock()
 	}
 }
@@ -50,13 +53,14 @@ func (f *Facility) listenRedis() error {
 		return err
 	}
 	conn.Do("select", redisDatabase)
-	psc := redis.PubSubConn{conn}
+	psc := redis.PubSubConn{Conn: conn}
 	k := strings.Join([]string{redisPrefix, facilityPrefix, f.name}, keySeparator)
 	log.Println("redis: listening to", k)
 	psc.Subscribe(k)
 	for {
 		switch v := psc.Receive().(type) {
 		case redis.Message:
+			log.Println("redis: got message; broadcasting")
 			f.channel <- v.Data
 		case error:
 			return err
@@ -74,6 +78,8 @@ func (f *Facility) redisLoop() {
 	}
 }
 
+// Subscribe creates new subscription channel and returns it
+// adding it to facility clients
 func (f *Facility) Subscribe() (m MessageChan) {
 	m = make(MessageChan)
 	f.l.Lock()
@@ -82,6 +88,7 @@ func (f *Facility) Subscribe() (m MessageChan) {
 	return m
 }
 
+// Unsubscibe removes channel from facility clients and closes it
 func (f *Facility) Unsubscibe(m MessageChan) {
 	f.l.Lock()
 	close(m)
