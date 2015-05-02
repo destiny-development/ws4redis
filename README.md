@@ -2,6 +2,11 @@ Websocket for redis
 =======
 Replacement for [django-ws-redis](https://github.com/jrief/django-websocket-redis) daemon.
 
+### Installation
+[Build](#building) or [download](https://github.com/ernado/ws4redis/releases) binary.
+
+Just copy to target machine.
+
 ### Building
 You need [installed go compiler](http://golang.org/doc/install)
 ```bash
@@ -13,9 +18,6 @@ cd ws4redis
 go build
 ./ws4redis -h
 ```
-
-### Installation
-Just copy binary file to target machine via scp or something else.
 
 #### Usage
 
