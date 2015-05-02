@@ -16,10 +16,9 @@ import (
 )
 
 const (
-	version        = "1.1-production"
+	version        = "1.2-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
-	maxEchoSize    = 256
 	attemptWait    = time.Second * 1
 )
 
@@ -32,12 +31,15 @@ var (
 	redisNetwork  string
 	redisPrefix   string
 
-	strictMode       bool
-	heartbeats       bool
-	scaleCPU         bool
-	staticFacilities = map[string]bool{"launcher": true, "launcher-staff": true}
-	defaultFacility  = "launcher"
-	clientTimeOut    = time.Second * 15
+	strictMode          bool
+	heartbeats          bool
+	scaleCPU            bool
+	permittedFacilities string
+	defaultFacility     string
+	clientTimeOut       time.Duration
+	maxEchoSize         int64
+
+	staticFacilities = make(map[string]bool)
 )
 
 var upgrader = websocket.Upgrader{
@@ -60,8 +62,11 @@ type Application struct {
 
 // Facility creates, initializes and returns new facility with provided name
 func (a *Application) Facility(name string) (f *Facility) {
-	a.l.Lock()
-	defer a.l.Unlock()
+	// lock only in non-strict mode
+	if !strictMode {
+		a.l.Lock()
+		defer a.l.Unlock()
+	}
 	f, ok := a.facilities[name]
 	if ok {
 		return f
@@ -89,11 +94,13 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	defer conn.Close()
+	conn.SetReadLimit(maxEchoSize)
+
 	// log.Println("connected", r.RemoteAddr, r.URL)
 	f := a.FacilityFromURL(r.URL)
 	c := f.Subscribe()
-	stop := make(chan bool)
-	defer close(stop)
+	defer f.Unsubscibe(c)
 
 	// listening for data from redis
 	go func() {
@@ -102,54 +109,20 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// closing connection and removing subscibtion after stop
-	go func() {
-		<-stop
-		conn.Close()
-		f.Unsubscibe(c)
-	}()
-
 	// handling heartbeat
 	// listening until conn timedout/error/closed or heatbeat timeout
-	heartBeats := make(chan bool)
-	go func() {
-		defer close(heartBeats)
-		for {
-			t, data, err := conn.ReadMessage()
-			// log.Println("got message", t, err)
-			if t != websocket.TextMessage {
-				return
-			}
-			if err != nil {
-				return
-			}
-			// possible DoS prevention
-			if len(data) > maxEchoSize {
-				return
-			}
-			if conn.WriteMessage(websocket.TextMessage, data) != nil {
-				return
-			}
-			// log.Println("heartbeat", r.RemoteAddr, r.URL)
-			heartBeats <- true
-		}
-	}()
-
-	// handling heartbeat timeouts and errors
 	for {
-		timeout := time.NewTimer(clientTimeOut)
-		select {
-		case _, ok := <-heartBeats:
-			if ok {
-				continue
-			}
-			// log.Println("disconnected", r.RemoteAddr, r.URL)
+		conn.SetReadDeadline(time.Now().Add(clientTimeOut))
+		t, data, err := conn.ReadMessage()
+		// log.Println("got message", t, err)
+		if t != websocket.TextMessage {
 			return
-		case <-timeout.C:
-			// log.Println("timed-out", r.RemoteAddr, r.URL)
-			if heartbeats {
-				return
-			}
+		}
+		if err != nil {
+			return
+		}
+		if conn.WriteMessage(websocket.TextMessage, data) != nil {
+			return
 		}
 	}
 }
@@ -197,6 +170,18 @@ func New() *Application {
 
 	a.facilities = make(map[string]*Facility)
 	a.l = new(sync.Mutex)
+
+	// pre-initialize facilities in strict mode
+	if strictMode {
+		facilities := strings.Split(permittedFacilities, ",")
+		for _, name := range facilities {
+			staticFacilities[name] = true
+			a.Facility(name)
+		}
+		if !staticFacilities[defaultFacility] {
+			log.Fatalln("default facility", defaultFacility, "not in", permittedFacilities)
+		}
+	}
 	return a
 }
 
@@ -207,9 +192,12 @@ func init() {
 	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis addr")
 	flag.StringVar(&redisPrefix, "redis-prefix", "ws", "Redis prefix")
 	flag.BoolVar(&strictMode, "strict", false, "Allow only white-listed facilities")
+	flag.StringVar(&permittedFacilities, "facilities", "launcher,launcher-staff", "Permitted facilities for strict mode")
+	flag.StringVar(&defaultFacility, "default", "launcher", "Default facility")
 	flag.BoolVar(&heartbeats, "heartbeats", false, "Use heartbeats")
 	flag.BoolVar(&scaleCPU, "scale", false, "Use all cpus")
-	flag.DurationVar(&clientTimeOut, "timeout", time.Second*15, "Heartbeat timeout")
+	flag.DurationVar(&clientTimeOut, "timeout", time.Second*10, "Heartbeat timeout")
+	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
 }
 
 func main() {
@@ -223,5 +211,11 @@ func main() {
 	listenOn := fmt.Sprintf("%s:%d", host, port)
 	log.Println("ws4redis", version)
 	log.Println("listening on", listenOn)
+	if strictMode {
+		log.Println("running in strict mode")
+	}
+	if !scaleCPU {
+		log.Println("running on single core")
+	}
 	log.Fatal(http.ListenAndServe(listenOn, nil))
 }
