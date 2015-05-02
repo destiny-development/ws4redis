@@ -22,39 +22,43 @@ Just copy binary file to target machine via scp or something else.
 ```bash
 $ ws4redis -h
 
-Usage of ws4redis:
+Usage of ./ws4redis:
+  -default="launcher": Default facility
+  -facilities="launcher,launcher-staff": Permitted facilities for strict mode
   -heartbeats=false: Use heartbeats
+  -max-size=32: Maximum message size
   -port=9050: Listen port
-  -redis-addr="localhost:6379": Redis address
+  -redis-addr="localhost:6379": Redis addr
   -redis-db=0: Redis db
   -redis-network="tcp": Redis network
   -redis-prefix="ws": Redis prefix
   -scale=false: Use all cpus
   -strict=false: Allow only white-listed facilities
-  -timeout=15s: Heartbeat timeout
+  -timeout=10s: Heartbeat timeout
+
 ```
 #### Statistics
 To see daemon stats just curl /stat 
 ```
 $ curl localhost:9050/stat
 ws4redis
-Version 1.1-production
+Version 1.2-production
 Facilities 2
 	facility launcher:
-		 19605 clients
+		 22505 clients
 	facility launcher-staff:
-		 0 clients
-Clients 19605
+		 1 clients
+Clients 22506
 CPU 24
-Goroutines 78431
+Goroutines 45022
 Memory
-	Alloc 274784024
-	TotalAlloc 61953223872
-	Heap 274784024
-	HeapSys 319307776
+	Alloc 195528640
+	TotalAlloc 3720837240
+	Heap 195528640
+	HeapSys 299450368
 ```
 
 ### Performance
-20k clients on 1 core = 600mb
+22k clients on 1 core = 453mb
 
-4 goroutines and 30kb per client
+2 goroutines and 30kb per client
