@@ -35,14 +35,14 @@ func NewFacility(name string) *Facility {
 func (f *Facility) loop() {
 	// for every message in channel
 	for s := range f.channel {
-		f.l.Lock()
 		log.Println("facility: got message; broadcasting")
 		// async broadcast to all clients of facility
+		f.l.Lock()
 		for client := range f.clients {
 			client <- s
 		}
-		log.Println("facility: broadcast ended")
 		f.l.Unlock()
+		log.Println("facility: broadcast ended")
 	}
 }
 
@@ -91,7 +91,7 @@ func (f *Facility) Subscribe() (m MessageChan) {
 // Unsubscibe removes channel from facility clients and closes it
 func (f *Facility) Unsubscibe(m MessageChan) {
 	f.l.Lock()
-	close(m)
 	delete(f.clients, m)
 	f.l.Unlock()
+	close(m)
 }
