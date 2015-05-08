@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version        = "1.2-production"
+	version        = "1.3-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	attemptWait    = time.Second * 1
@@ -54,9 +54,17 @@ type Message []byte
 // MessageChan is channel of messages
 type MessageChan chan Message
 
+// Facilities is map[name]Pointer-to-facility
+// should be locked on change (used async)
+type Facilities map[string]*Facility
+
+// Clients must be locked too, used as list of clients
+// with easy way to add/remove client
+type Clients map[MessageChan]bool
+
 // Application contains main logic
 type Application struct {
-	facilities map[string]*Facility
+	facilities Facilities
 	l          sync.Locker
 }
 
@@ -163,12 +171,13 @@ func New() *Application {
 	if err != nil {
 		log.Fatal("Redis error:", err)
 	}
+	// testing database select
 	_, err = conn.Do("select", redisDatabase)
 	if err != nil {
 		log.Fatal("Redis db change error:", err)
 	}
 
-	a.facilities = make(map[string]*Facility)
+	a.facilities = make(Facilities)
 	a.l = new(sync.Mutex)
 
 	// pre-initialize facilities in strict mode
@@ -202,6 +211,8 @@ func init() {
 
 func main() {
 	flag.Parse()
+
+	// initialize
 	a := New()
 	if scaleCPU {
 		runtime.GOMAXPROCS(runtime.NumCPU())
@@ -209,6 +220,8 @@ func main() {
 	http.HandleFunc("/", a.handler)
 	http.HandleFunc("/stat", a.stat)
 	listenOn := fmt.Sprintf("%s:%d", host, port)
+
+	// print information about modes/version
 	log.Println("ws4redis", version)
 	log.Println("listening on", listenOn)
 	if strictMode {
@@ -217,5 +230,7 @@ func main() {
 	if !scaleCPU {
 		log.Println("running on single core")
 	}
+
+	// block until error/kill
 	log.Fatal(http.ListenAndServe(listenOn, nil))
 }
