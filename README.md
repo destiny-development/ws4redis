@@ -1,6 +1,7 @@
 Websocket for redis
 =======
 Replacement for [django-ws-redis](https://github.com/jrief/django-websocket-redis) daemon.
+See [implementation](#implementation) if you want to re-implement daemon functionality or it subset
 
 ### Installation
 [Build](#building) or [download](https://github.com/ernado/ws4redis/releases/latest) binary.
@@ -19,7 +20,7 @@ go build
 ./ws4redis -h
 ```
 
-#### Usage
+### Usage
 
 ```bash
 $ ws4redis -h
@@ -37,10 +38,11 @@ Usage of ./ws4redis:
   -scale=false: Use all cpus
   -strict=false: Allow only white-listed facilities
   -timeout=10s: Heartbeat timeout
-
 ```
-#### Statistics
-To see daemon stats just curl /stat 
+
+### Statistics
+
+To see daemon stats just curl /stat
 ```
 $ curl localhost:9050/stat
 ws4redis
@@ -64,3 +66,17 @@ Memory
 22k clients on 1 core = 453mb
 
 2 goroutines and 30kb per client
+
+
+### Implementation
+Server listens for websocket connections on `{host}:{port}/{prefix}/{facility}`,
+e.g. `ws.host.com/ws/launcher`,
+expects heartbeats every 5s (by default, timeout is 10s) and acts as echo-server.
+
+#### Timeout
+If no heartbeats are sent by client in {timeout}, server closes websocket connection
+
+#### Broadcasting
+For every facility server creates redis connection and starts listening on
+channel `{redis-prefix}:broadcast:{facility}` (e.g. `ws:broadcast:launcher`).
+Every message published on this channel is sent to all clients of {facility} without any changes.
