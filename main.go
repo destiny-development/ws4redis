@@ -111,7 +111,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	conn.SetReadLimit(maxEchoSize)
 
-	log.Println("connected", r.RemoteAddr, r.URL)
+	// log.Println("connected", r.RemoteAddr, r.URL)
 	f := a.FacilityFromURL(r.URL)
 	c := f.Subscribe()
 	defer f.Unsubscibe(c)
@@ -129,6 +129,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 		conn.SetReadDeadline(time.Now().Add(clientTimeOut))
 		t, rd, err := conn.NextReader()
 		if err != nil {
+			// log.Println("error", r.RemoteAddr, err)
 			return
 		}
 		if t != websocket.TextMessage {
@@ -193,7 +194,6 @@ func New() *Application {
 
 	// pre-initialize facilities in strict mode
 	if strictMode {
-		log.Println("running in strict mode")
 		facilities := strings.Split(permittedFacilities, ",")
 		for _, name := range facilities {
 			staticFacilities[name] = true
@@ -202,14 +202,10 @@ func New() *Application {
 		if !staticFacilities[defaultFacility] {
 			log.Fatalln("default facility", defaultFacility, "not in", permittedFacilities)
 		}
-	} else {
-		log.Println("all facilities are allowed")
 	}
 
 	if scaleCPU {
 		runtime.GOMAXPROCS(runtime.NumCPU())
-	} else {
-		log.Println("running on single core")
 	}
 
 	mux.HandleFunc("/", a.handler)
@@ -217,8 +213,6 @@ func New() *Application {
 	listenOn := fmt.Sprintf("%s:%d", host, port)
 
 	// print information about modes/version
-	log.Println("ws4redis", version)
-	log.Println("listening on", listenOn)
 	a.mux = mux
 	a.listenOn = listenOn
 	return a
@@ -247,5 +241,15 @@ func init() {
 func main() {
 	flag.Parse()
 	a := New()
+	fmt.Println("ws4redis", version)
+	fmt.Println("listening on", a.listenOn)
+	if !scaleCPU {
+		fmt.Println("warning: using one core")
+	}
+	if !strictMode {
+		fmt.Println("warning: running in unstrict mode")
+	} else {
+		fmt.Println("running in strict mode; allowed facilities:", permittedFacilities)
+	}
 	log.Fatal(http.ListenAndServe(a.listenOn, a))
 }
