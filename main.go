@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	version        = "1.3-production"
+	version        = "1.5-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	attemptWait    = time.Second * 1
@@ -43,9 +44,12 @@ var (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	ReadBufferSize:  512,
+	WriteBufferSize: 512,
 	CheckOrigin:     func(r *http.Request) bool { return true }, // allow any origin
+	Error: func(w http.ResponseWriter, r *http.Request, status int, reason error) {
+		http.Error(w, reason.Error(), status)
+	},
 }
 
 // Message is container for messages between server and clients
@@ -66,6 +70,8 @@ type Clients map[MessageChan]bool
 type Application struct {
 	facilities Facilities
 	l          sync.Locker
+	mux        *http.ServeMux
+	listenOn   string
 }
 
 // Facility creates, initializes and returns new facility with provided name
@@ -79,7 +85,7 @@ func (a *Application) Facility(name string) (f *Facility) {
 	if ok {
 		return f
 	}
-	f = NewFacility(name)
+	f = NewRedisFacility(name)
 	a.facilities[name] = f
 	return f
 }
@@ -105,7 +111,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	conn.SetReadLimit(maxEchoSize)
 
-	// log.Println("connected", r.RemoteAddr, r.URL)
+	log.Println("connected", r.RemoteAddr, r.URL)
 	f := a.FacilityFromURL(r.URL)
 	c := f.Subscribe()
 	defer f.Unsubscibe(c)
@@ -121,15 +127,19 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	// listening until conn timedout/error/closed or heatbeat timeout
 	for {
 		conn.SetReadDeadline(time.Now().Add(clientTimeOut))
-		t, data, err := conn.ReadMessage()
-		// log.Println("got message", t, err)
-		if t != websocket.TextMessage {
-			return
-		}
+		t, rd, err := conn.NextReader()
 		if err != nil {
 			return
 		}
-		if conn.WriteMessage(websocket.TextMessage, data) != nil {
+		if t != websocket.TextMessage {
+			continue
+		}
+		wr, err := conn.NextWriter(t)
+		if _, err = io.Copy(wr, rd); err != nil {
+			log.Println("error", r.RemoteAddr, err)
+			return
+		}
+		if wr.Close() != nil {
 			return
 		}
 	}
@@ -165,6 +175,7 @@ func (a Application) stat(w http.ResponseWriter, r *http.Request) {
 // New creates and initializes new Application
 func New() *Application {
 	a := new(Application)
+	mux := http.NewServeMux()
 
 	// testing redis connection
 	conn, err := redis.Dial(redisNetwork, redisAddr)
@@ -182,6 +193,7 @@ func New() *Application {
 
 	// pre-initialize facilities in strict mode
 	if strictMode {
+		log.Println("running in strict mode")
 		facilities := strings.Split(permittedFacilities, ",")
 		for _, name := range facilities {
 			staticFacilities[name] = true
@@ -190,8 +202,31 @@ func New() *Application {
 		if !staticFacilities[defaultFacility] {
 			log.Fatalln("default facility", defaultFacility, "not in", permittedFacilities)
 		}
+	} else {
+		log.Println("all facilities are allowed")
 	}
+
+	if scaleCPU {
+		runtime.GOMAXPROCS(runtime.NumCPU())
+	} else {
+		log.Println("running on single core")
+	}
+
+	mux.HandleFunc("/", a.handler)
+	mux.HandleFunc("/stat", a.stat)
+	listenOn := fmt.Sprintf("%s:%d", host, port)
+
+	// print information about modes/version
+	log.Println("ws4redis", version)
+	log.Println("listening on", listenOn)
+	a.mux = mux
+	a.listenOn = listenOn
 	return a
+}
+
+// ServeHTTP is proxy to a.mux.ServeHTTP
+func (a *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.mux.ServeHTTP(w, r)
 }
 
 func init() {
@@ -211,26 +246,6 @@ func init() {
 
 func main() {
 	flag.Parse()
-
-	// initialize
 	a := New()
-	if scaleCPU {
-		runtime.GOMAXPROCS(runtime.NumCPU())
-	}
-	http.HandleFunc("/", a.handler)
-	http.HandleFunc("/stat", a.stat)
-	listenOn := fmt.Sprintf("%s:%d", host, port)
-
-	// print information about modes/version
-	log.Println("ws4redis", version)
-	log.Println("listening on", listenOn)
-	if strictMode {
-		log.Println("running in strict mode")
-	}
-	if !scaleCPU {
-		log.Println("running on single core")
-	}
-
-	// block until error/kill
-	log.Fatal(http.ListenAndServe(listenOn, nil))
+	log.Fatal(http.ListenAndServe(a.listenOn, a))
 }

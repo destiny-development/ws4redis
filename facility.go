@@ -9,26 +9,118 @@ import (
 	"github.com/garyburd/redigo/redis"
 )
 
+// MessageProvider is source of messages
+type MessageProvider interface {
+	Channel() MessageChan
+}
+
+// MemoryMessageProvider uses channels for source of messages
+type MemoryMessageProvider struct {
+	Messages MessageChan
+}
+
+// Channel returns MessageChan
+func (p MemoryMessageProvider) Channel() MessageChan {
+	return p.Messages
+}
+
+// RedisMessageProvider implements MessageProvider
+type RedisMessageProvider struct {
+	conn     redis.PubSubConn
+	key      string
+	messages MessageChan
+}
+
+func (p *RedisMessageProvider) connect() error {
+	conn, err := redis.Dial(redisNetwork, redisAddr)
+	if err != nil {
+		return err
+	}
+	// selecting database
+	_, err = conn.Do("select", redisDatabase)
+	if err != nil {
+		return err
+	}
+	psc := redis.PubSubConn{Conn: conn}
+	// creating
+	if err := psc.Subscribe(p.key); err != nil {
+		return err
+	}
+	p.conn = psc
+	return nil
+}
+
+// listen to facility key in redis and broadcast all data
+func (p *RedisMessageProvider) listen() error {
+	log.Printf("[redis] listening to channel %s", p.key)
+	for {
+		switch v := p.conn.Receive().(type) {
+		case redis.Message:
+			log.Printf("[redis] message: %s", string(v.Data))
+			p.messages <- v.Data
+		case error:
+			return v
+		}
+	}
+}
+
+// redis reconnection loop
+func (p RedisMessageProvider) loop() {
+	for {
+		if err := p.listen(); err != nil {
+			log.Printf("[redis] error: %s; sleeping for: %v;", err, attemptWait)
+			time.Sleep(attemptWait)
+			if err := p.connect(); err != nil {
+				log.Println("[redis] unable to reconnect", err)
+			}
+		}
+	}
+}
+
+// Channel returns MessageChan with messages from redis channel
+func (p RedisMessageProvider) Channel() MessageChan {
+	return p.messages
+}
+
+// NewRedisProvider creates new redis connection and sends new messages
+// to channel
+func NewRedisProvider(name string) MessageProvider {
+	p := &RedisMessageProvider{key: name}
+	p.messages = make(MessageChan)
+	if err := p.connect(); err != nil {
+		panic(err)
+	}
+	go p.loop()
+	return p
+}
+
 // Facility represents channel, which users can listen
 // and server can broadcast message to all subscribed users
 type Facility struct {
-	name    string      // name of facility
-	channel MessageChan // broadcast channel
-	clients Clients     // client channels
-	l       sync.Locker // lock for clients
+	name     string      // name of facility
+	channel  MessageChan // broadcast channel
+	clients  Clients     // client channels
+	l        sync.Locker // lock for clients
+	provider MessageProvider
 }
 
 // NewFacility creates facility, starts redis and broadcast loops
 // and returns initialized *Facility
-func NewFacility(name string) *Facility {
+func NewFacility(name string, provider MessageProvider) *Facility {
 	f := new(Facility)
-	f.channel = make(MessageChan)
+	f.channel = provider.Channel()
 	f.clients = make(Clients)
 	f.l = new(sync.Mutex)
 	f.name = name
 	go f.loop()
-	go f.redisLoop()
 	return f
+}
+
+// NewRedisFacility creates facility with redis provider
+func NewRedisFacility(name string) *Facility {
+	key := strings.Join([]string{redisPrefix, facilityPrefix, name}, keySeparator)
+	provider := NewRedisProvider(key)
+	return NewFacility(name, provider)
 }
 
 // broadcast loop
@@ -46,44 +138,6 @@ func (f *Facility) loop() {
 		f.l.Unlock()
 		duration := time.Now().Sub(start)
 		log.Printf("[%s] broadcasted for %v", f.name, duration)
-	}
-}
-
-// listen to facility key in redis and broadcast all data
-func (f *Facility) listenRedis() error {
-	// one connection per facility (for simplification purposes)
-	conn, err := redis.Dial(redisNetwork, redisAddr)
-	if err != nil {
-		return err
-	}
-	// selecting database
-	_, err = conn.Do("select", redisDatabase)
-	if err != nil {
-		return err
-	}
-	psc := redis.PubSubConn{Conn: conn}
-	// creating
-	k := strings.Join([]string{redisPrefix, facilityPrefix, f.name}, keySeparator)
-	psc.Subscribe(k)
-	log.Printf("[%s] [redis] listening to channel %s", f.name, k)
-	for {
-		switch v := psc.Receive().(type) {
-		case redis.Message:
-			log.Printf("[%s] [redis] message: %s", f.name, string(v.Data))
-			f.channel <- v.Data
-		case error:
-			return err
-		}
-	}
-}
-
-// redis reconnection loop
-func (f *Facility) redisLoop() {
-	for {
-		if err := f.listenRedis(); err != nil {
-			log.Printf("[%s] [redis] error: %s; sleeping for: %v;", f.name, err, attemptWait)
-			time.Sleep(attemptWait)
-		}
 	}
 }
 
