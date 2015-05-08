@@ -6,18 +6,21 @@ See [implementation](#implementation) if you want to re-implement daemon functio
 ### Installation
 [Build](#building) or [download](https://github.com/destiny-development/ws4redis/releases/latest) binary.
 
-Just copy to target machine.
+Just copy executable to target machine.
 
 ### Building
-You need [installed go compiler](http://golang.org/doc/install)
+You need [installed go compiler](http://golang.org/doc/install) and valid [$GOPATH](https://golang.org/doc/code.html#GOPATH) environment variable 
 ```bash
-go get github.com/destiny-development/ws4redis
+export $GOPATH=~/go # or any another folder with write access 
+# just skip it you have already exported GOPATH variable
+go get -u github.com/destiny-development/ws4redis
+# `go get` will download sources and all deps, then build the binary
+./$GOPATH/bin/ws4redis -h 
+# or add $GOPATH/bin to $PATH and just
 ws4redis -h
-# or
-git clone https://github.com/destiny-development/ws4redis
-cd ws4redis
-go build
-./ws4redis -h
+# sources are in $GOPATH/src/github.com/destiny-development/ws4redis
+# to update, just 
+go get -u github.com/destiny-development/ws4redis
 ```
 
 ### Usage
