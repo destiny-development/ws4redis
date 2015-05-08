@@ -4,17 +4,17 @@ Replacement for [django-ws-redis](https://github.com/jrief/django-websocket-redi
 See [implementation](#implementation) if you want to re-implement daemon functionality or it subset
 
 ### Installation
-[Build](#building) or [download](https://github.com/ernado/ws4redis/releases/latest) binary.
+[Build](#building) or [download](https://github.com/destiny-development/ws4redis/releases/latest) binary.
 
 Just copy to target machine.
 
 ### Building
 You need [installed go compiler](http://golang.org/doc/install)
 ```bash
-go get github.com/ernado/ws4redis
+go get github.com/destiny-development/ws4redis
 ws4redis -h
 # or
-git clone https://github.com/ernado/ws4redis.git
+git clone https://github.com/destiny-development/ws4redis
 cd ws4redis
 go build
 ./ws4redis -h
