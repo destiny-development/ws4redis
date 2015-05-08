@@ -3,7 +3,7 @@ Websocket for redis
 Replacement for [django-ws-redis](https://github.com/jrief/django-websocket-redis) daemon.
 
 ### Installation
-[Build](#building) or [download](https://github.com/ernado/ws4redis/releases) binary.
+[Build](#building) or [download](https://github.com/ernado/ws4redis/releases/latest) binary.
 
 Just copy to target machine.
 
