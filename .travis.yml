@@ -6,6 +6,9 @@ go:
  - release
  - tip
 
+services:
+  - redis-server
+
 before_install:
  - export PATH=/home/travis/gopath/bin:$PATH
 
