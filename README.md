@@ -1,6 +1,7 @@
 Websocket for redis
 =======
 [![Build Status](https://travis-ci.org/ernado/ws4redis.svg)](https://travis-ci.org/ernado/ws4redis)
+[![Coverage Status](https://coveralls.io/repos/ernado/ws4redis/badge.svg?branch=master)](https://coveralls.io/r/ernado/ws4redis?branch=master)
 
 
 Replacement for [django-ws-redis](https://github.com/jrief/django-websocket-redis) daemon.
