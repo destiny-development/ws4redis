@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	version        = "1.5.4-production"
+	version        = "1.5.5-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	attemptWait    = time.Second * 1
@@ -122,9 +122,10 @@ func must(err error) {
 }
 
 func (a Application) handler(w http.ResponseWriter, r *http.Request) {
-	defer recover()
-
 	conn, err := upgrader.Upgrade(w, r, nil)
+	defer func() {
+		recover()
+	}()
 	must(err)
 	defer conn.Close()
 	conn.SetReadLimit(maxEchoSize)
