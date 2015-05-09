@@ -12,10 +12,11 @@ import (
 	"sync"
 	"time"
 
-	_ "expvar"
+	"expvar"
 
 	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/websocket"
+	"github.com/paulbellamy/ratecounter"
 )
 
 const (
@@ -74,6 +75,7 @@ type Application struct {
 	l          sync.Locker
 	mux        *http.ServeMux
 	listenOn   string
+	rate       *ratecounter.RateCounter
 }
 
 // Facility creates, initializes and returns new facility with provided name
@@ -105,6 +107,18 @@ func getFacility(u *url.URL) string {
 	return u.Path[strings.LastIndex(u.Path, "/")+1:]
 }
 
+func (a Application) clients() interface{} {
+	var totalClients int64
+	for _, f := range a.facilities {
+		totalClients += int64(len(f.clients))
+	}
+	return totalClients
+}
+
+func (a Application) requestsPerSecond() interface{} {
+	return a.rate.Rate()
+}
+
 func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -112,6 +126,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	conn.SetReadLimit(maxEchoSize)
+	a.rate.Incr(1)
 
 	// log.Println("connected", r.RemoteAddr, r.URL)
 	f := a.FacilityFromURL(r.URL)
@@ -178,6 +193,7 @@ func (a Application) stat(w http.ResponseWriter, r *http.Request) {
 // New creates and initializes new Application
 func New() *Application {
 	a := new(Application)
+	a.rate = ratecounter.NewRateCounter(time.Second)
 	mux := http.NewServeMux()
 
 	// testing redis connection
@@ -210,6 +226,7 @@ func New() *Application {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 	}
 
+	mux.Handle("/debug/vars", http.DefaultServeMux)
 	mux.HandleFunc("/", a.handler)
 	mux.HandleFunc("/stat", a.stat)
 	listenOn := fmt.Sprintf("%s:%d", host, port)
@@ -223,6 +240,15 @@ func New() *Application {
 // ServeHTTP is proxy to a.mux.ServeHTTP
 func (a *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.mux.ServeHTTP(w, r)
+}
+
+// goroutines is an expvar.Func compliant wrapper for runtime.NumGoroutine function.
+func goroutines() interface{} {
+	return runtime.NumGoroutine()
+}
+
+func currentVersion() interface{} {
+	return version
 }
 
 func init() {
@@ -253,5 +279,9 @@ func main() {
 	} else {
 		fmt.Println("running in strict mode; allowed facilities:", permittedFacilities)
 	}
+	expvar.Publish("Clients", expvar.Func(a.clients))
+	expvar.Publish("Goroutines", expvar.Func(goroutines))
+	expvar.Publish("RPS", expvar.Func(a.requestsPerSecond))
+	expvar.Publish("Version", expvar.Func(currentVersion))
 	log.Fatal(http.ListenAndServe(a.listenOn, a))
 }
