@@ -12,12 +12,14 @@ import (
 	"sync"
 	"time"
 
+	_ "expvar"
+
 	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/websocket"
 )
 
 const (
-	version        = "1.5-production"
+	version        = "1.5.1-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	attemptWait    = time.Second * 1
