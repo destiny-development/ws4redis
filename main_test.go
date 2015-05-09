@@ -84,7 +84,7 @@ func init() {
 
 func TestApplication(t *testing.T) {
 	Convey("Create", t, func() {
-		app := New()
+		app := getApplication()
 		So(app, ShouldNotBeNil)
 		Convey("Get facility", func() {
 			f := app.Facility("launcher")
@@ -97,6 +97,7 @@ func TestApplication(t *testing.T) {
 			So(f.name, ShouldEqual, "test")
 		})
 		Convey("Websocket connection", func() {
+			So(app.clients(), ShouldEqual, 0)
 			s := newWSServer(t, app)
 			defer s.Close()
 			ws, _, err := cstDialer.Dial(s.URL+"/facility?test=true", nil)
@@ -108,6 +109,10 @@ func TestApplication(t *testing.T) {
 			message := []byte("testmessage")
 			_, err = conn.Do("select", redisDatabase)
 			So(err, ShouldBeNil)
+			So(app.clients(), ShouldEqual, 1)
+			So(app.requestsPerSecond(), ShouldEqual, 1)
+			So(currentVersion(), ShouldEqual, version)
+			So(goroutines(), ShouldNotEqual, 0)
 			Convey("Send from server", func() {
 				_, err := conn.Do("publish", "ws-test:broadcast:facility", message)
 				So(err, ShouldBeNil)
@@ -118,6 +123,12 @@ func TestApplication(t *testing.T) {
 					So(reflect.DeepEqual(message, readMessage), ShouldBeTrue)
 				})
 			})
+			Convey("Send non-message", func() {
+				ws.SetReadDeadline(time.Now().Add(time.Millisecond * 10))
+				So(ws.WriteMessage(websocket.BinaryMessage, []byte("123213")), ShouldBeNil)
+				_, _, err := ws.ReadMessage()
+				So(err, ShouldNotBeNil)
+			})
 		})
 	})
 }
@@ -126,6 +137,37 @@ func TestApplicationStrict(t *testing.T) {
 	strictMode = true
 	Convey("Create", t, func() {
 		app := New()
+		// So(app, ShouldNotBeNil)
+		Convey("Get ok facility", func() {
+			u, _ := url.Parse("/ws/launcher?asdsadas")
+			f := app.FacilityFromURL(u)
+			So(f, ShouldNotBeNil)
+			So(f.name, ShouldEqual, "launcher")
+		})
+		Convey("Get forbidden", func() {
+			u, _ := url.Parse("/ws/forbidden?test")
+			f := app.FacilityFromURL(u)
+			So(f, ShouldNotBeNil)
+			So(f.name, ShouldEqual, "launcher")
+		})
+		Convey("Stat handler", func() {
+			s := newServer(t, app)
+			defer s.Close()
+			res, err := http.Get(s.URL + "/stat")
+			So(err, ShouldBeNil)
+			So(res.StatusCode, ShouldEqual, http.StatusOK)
+			b, err := ioutil.ReadAll(res.Body)
+			So(err, ShouldBeNil)
+			So(string(b), ShouldContainSubstring, version)
+			So(string(b), ShouldContainSubstring, "ws4redis")
+		})
+	})
+}
+
+func TestApplicationViaGet(t *testing.T) {
+	strictMode = true
+	Convey("Create", t, func() {
+		app := getApplication()
 		// So(app, ShouldNotBeNil)
 		Convey("Get ok facility", func() {
 			u, _ := url.Parse("/ws/launcher?asdsadas")

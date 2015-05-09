@@ -69,6 +69,30 @@ func TestRedisFacility(t *testing.T) {
 }
 
 func TestRedisProvider(t *testing.T) {
+	Convey("Panic", t, func() {
+		defer func() {
+			redisNetwork = "tcp"
+		}()
+		So(func() {
+			redisNetwork = "kek"
+			NewRedisProvider("pek")
+		}, ShouldPanic)
+	})
+	Convey("Bad database", t, func() {
+		defer func() {
+			redisDatabase = 0
+		}()
+		redisDatabase = 1024
+		So(func() {
+			NewRedisProvider("pek")
+		}, ShouldPanic)
+	})
+	Convey("Reconnect", t, func() {
+		p := NewRedisProvider("tst~2")
+		conn := p.(*RedisMessageProvider).conn
+		conn.Close()
+		So(p.(*RedisMessageProvider).connect(), ShouldBeNil)
+	})
 	Convey("Create", t, func() {
 		k := "redis-test:provider"
 		p := NewRedisProvider(k)

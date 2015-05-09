@@ -42,7 +42,6 @@ func (p *RedisMessageProvider) connect() error {
 		return err
 	}
 	psc := redis.PubSubConn{Conn: conn}
-	// creating
 	if err := psc.Subscribe(p.key); err != nil {
 		return err
 	}
@@ -50,29 +49,14 @@ func (p *RedisMessageProvider) connect() error {
 	return nil
 }
 
-// listen to facility key in redis and broadcast all data
-func (p *RedisMessageProvider) listen() error {
-	log.Printf("[redis] listening to channel %s", p.key)
+func (p RedisMessageProvider) loop() {
 	for {
 		switch v := p.conn.Receive().(type) {
 		case redis.Message:
-			log.Printf("[redis] message: %s", string(v.Data))
 			p.messages <- v.Data
 		case error:
-			return v
-		}
-	}
-}
-
-// redis reconnection loop
-func (p RedisMessageProvider) loop() {
-	for {
-		if err := p.listen(); err != nil {
-			log.Printf("[redis] error: %s; sleeping for: %v;", err, attemptWait)
+			p.connect()
 			time.Sleep(attemptWait)
-			if err := p.connect(); err != nil {
-				log.Println("[redis] unable to reconnect", err)
-			}
 		}
 	}
 }
@@ -127,8 +111,7 @@ func NewRedisFacility(name string) *Facility {
 func (f *Facility) loop() {
 	// for every message in channel
 	for s := range f.channel {
-		log.Printf("[%s] got message", f.name)
-		start := time.Now()
+		log.Printf("[%s] broadcasting", f.name)
 		// async broadcast to all clients of facility
 		// locking changes to client list
 		f.l.Lock()
@@ -136,8 +119,6 @@ func (f *Facility) loop() {
 			client <- s
 		}
 		f.l.Unlock()
-		duration := time.Now().Sub(start)
-		log.Printf("[%s] broadcasted for %v", f.name, duration)
 	}
 }
 

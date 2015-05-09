@@ -14,13 +14,12 @@ import (
 
 	"expvar"
 
-	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/websocket"
 	"github.com/paulbellamy/ratecounter"
 )
 
 const (
-	version        = "1.5.1-production"
+	version        = "1.5.4-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	attemptWait    = time.Second * 1
@@ -47,12 +46,9 @@ var (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  512,
-	WriteBufferSize: 512,
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
 	CheckOrigin:     func(r *http.Request) bool { return true }, // allow any origin
-	Error: func(w http.ResponseWriter, r *http.Request, status int, reason error) {
-		http.Error(w, reason.Error(), status)
-	},
 }
 
 // Message is container for messages between server and clients
@@ -119,11 +115,17 @@ func (a Application) requestsPerSecond() interface{} {
 	return a.rate.Rate()
 }
 
-func (a Application) handler(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+func must(err error) {
 	if err != nil {
-		return
+		panic(err)
 	}
+}
+
+func (a Application) handler(w http.ResponseWriter, r *http.Request) {
+	defer recover()
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	must(err)
 	defer conn.Close()
 	conn.SetReadLimit(maxEchoSize)
 	a.rate.Incr(1)
@@ -145,21 +147,14 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	for {
 		conn.SetReadDeadline(time.Now().Add(clientTimeOut))
 		t, rd, err := conn.NextReader()
-		if err != nil {
-			// log.Println("error", r.RemoteAddr, err)
-			return
-		}
+		must(err)
 		if t != websocket.TextMessage {
 			continue
 		}
 		wr, err := conn.NextWriter(t)
-		if _, err = io.Copy(wr, rd); err != nil {
-			log.Println("error", r.RemoteAddr, err)
-			return
-		}
-		if wr.Close() != nil {
-			return
-		}
+		_, err = io.Copy(wr, rd)
+		must(err)
+		must(wr.Close())
 	}
 }
 
@@ -195,18 +190,6 @@ func New() *Application {
 	a := new(Application)
 	a.rate = ratecounter.NewRateCounter(time.Second)
 	mux := http.NewServeMux()
-
-	// testing redis connection
-	conn, err := redis.Dial(redisNetwork, redisAddr)
-	if err != nil {
-		log.Fatal("Redis error:", err)
-	}
-	// testing database select
-	_, err = conn.Do("select", redisDatabase)
-	if err != nil {
-		log.Fatal("Redis db change error:", err)
-	}
-
 	a.facilities = make(Facilities)
 	a.l = new(sync.Mutex)
 
@@ -266,8 +249,7 @@ func init() {
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
 }
 
-func main() {
-	flag.Parse()
+func getApplication() *Application {
 	a := New()
 	fmt.Println("ws4redis", version)
 	fmt.Println("listening on", a.listenOn)
@@ -279,6 +261,12 @@ func main() {
 	} else {
 		fmt.Println("running in strict mode; allowed facilities:", permittedFacilities)
 	}
+	return a
+}
+
+func main() {
+	flag.Parse()
+	a := getApplication()
 	expvar.Publish("Clients", expvar.Func(a.clients))
 	expvar.Publish("Goroutines", expvar.Func(goroutines))
 	expvar.Publish("RPS", expvar.Func(a.requestsPerSecond))
