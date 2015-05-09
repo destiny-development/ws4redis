@@ -47,9 +47,13 @@ Usage of ./ws4redis:
   -timeout=10s: Heartbeat timeout
 ```
 
-### Statistics
+### Monitoring
+One can launch [expvarmon](https://github.com/divan/expvarmon) to monitor connections/memory usage:
+```bash
+expvarmon -ports="9050" -i=200ms -vars="mem:memstats.Alloc,mem:memstats.Sys,mem:memstats.HeapAlloc,mem:memstats.HeapInuse,,memstats.NumGC,duration:memstats.PauseTotalNs,Goroutines,Clients,RPS,Version"
+```
 
-To see daemon stats just curl /stat
+Just simply curl `/stat` or use [expvar's](https://golang.org/pkg/expvar/) `/debug/vars`
 ```
 $ curl localhost:9050/stat
 ws4redis
