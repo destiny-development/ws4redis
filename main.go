@@ -102,15 +102,11 @@ func (a *Application) Facility(name string) (f *Facility) {
 
 // FacilityFromURL wraps Application.Facility
 func (a *Application) FacilityFromURL(u *url.URL) (f *Facility) {
-	name := getFacility(u)
+	name := u.Path[strings.LastIndex(u.Path, "/")+1:]
 	if strictMode && !staticFacilities[name] {
 		name = defaultFacility
 	}
 	return a.Facility(name)
-}
-
-func getFacility(u *url.URL) string {
-	return u.Path[strings.LastIndex(u.Path, "/")+1:]
 }
 
 func (a Application) clients() interface{} {
