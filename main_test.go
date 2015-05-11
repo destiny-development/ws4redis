@@ -98,6 +98,7 @@ func TestApplication(t *testing.T) {
 		})
 		Convey("Websocket connection", func() {
 			So(app.clients(), ShouldEqual, 0)
+			So(app.requestsPerSecond(), ShouldEqual, 0)
 			s := newWSServer(t, app)
 			defer s.Close()
 			ws, _, err := cstDialer.Dial(s.URL+"/facility?test=true", nil)
@@ -109,8 +110,6 @@ func TestApplication(t *testing.T) {
 			message := []byte("testmessage")
 			_, err = conn.Do("select", redisDatabase)
 			So(err, ShouldBeNil)
-			So(app.clients(), ShouldEqual, 1)
-			So(app.requestsPerSecond(), ShouldEqual, 1)
 			So(currentVersion(), ShouldEqual, version)
 			So(goroutines(), ShouldNotEqual, 0)
 			Convey("Send from server", func() {
