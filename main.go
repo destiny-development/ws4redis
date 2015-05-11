@@ -68,8 +68,8 @@ type Clients map[MessageChan]bool
 // Application contains main logic
 type Application struct {
 	facilities Facilities
-	l          sync.Locker
-	mux        *http.ServeMux // facilities lock
+	l          sync.Locker // facilities lock
+	mux        *http.ServeMux
 	listenOn   string
 	rate       *ratecounter.RateCounter
 }
