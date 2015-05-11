@@ -69,17 +69,27 @@ type Clients map[MessageChan]bool
 type Application struct {
 	facilities Facilities
 	l          sync.Locker
-	mux        *http.ServeMux
+	mux        *http.ServeMux // facilities lock
 	listenOn   string
 	rate       *ratecounter.RateCounter
+}
+
+// Lock facilities list
+func (a Application) Lock() {
+	a.l.Lock()
+}
+
+// Unlock facilities list
+func (a Application) Unlock() {
+	a.l.Unlock()
 }
 
 // Facility creates, initializes and returns new facility with provided name
 func (a *Application) Facility(name string) (f *Facility) {
 	// lock only in non-strict mode
 	if !strictMode {
-		a.l.Lock()
-		defer a.l.Unlock()
+		a.Lock()
+		defer a.Unlock()
 	}
 	f, ok := a.facilities[name]
 	if ok {

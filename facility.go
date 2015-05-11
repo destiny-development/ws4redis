@@ -88,6 +88,16 @@ type Facility struct {
 	provider MessageProvider
 }
 
+// Lock clients list
+func (f Facility) Lock() {
+	f.l.Lock()
+}
+
+// Unlock clients list
+func (f Facility) Unlock() {
+	f.l.Unlock()
+}
+
 // NewFacility creates facility, starts redis and broadcast loops
 // and returns initialized *Facility
 func NewFacility(name string, provider MessageProvider) *Facility {
@@ -114,11 +124,11 @@ func (f *Facility) loop() {
 		log.Printf("[%s] broadcasting", f.name)
 		// async broadcast to all clients of facility
 		// locking changes to client list
-		f.l.Lock()
+		f.Lock()
 		for client := range f.clients {
 			client <- s
 		}
-		f.l.Unlock()
+		f.Unlock()
 	}
 }
 
@@ -126,16 +136,16 @@ func (f *Facility) loop() {
 // adding it to facility clients
 func (f *Facility) Subscribe() (m MessageChan) {
 	m = make(MessageChan)
-	f.l.Lock()
+	f.Lock()
 	f.clients[m] = true
-	f.l.Unlock()
+	f.Unlock()
 	return m
 }
 
 // Unsubscibe removes channel from facility clients and closes it
 func (f *Facility) Unsubscibe(m MessageChan) {
-	f.l.Lock()
+	f.Lock()
 	delete(f.clients, m)
-	f.l.Unlock()
+	f.Unlock()
 	close(m)
 }
