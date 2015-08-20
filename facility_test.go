@@ -16,6 +16,16 @@ func init() {
 	redisPrefix = "ws-test"
 }
 
+// MemoryMessageProvider uses channels for source of messages
+type MemoryMessageProvider struct {
+	Messages MessageChan
+}
+
+// Channel returns MessageChan
+func (p MemoryMessageProvider) Channel() MessageChan {
+	return p.Messages
+}
+
 func TestMemoryFacility(t *testing.T) {
 	Convey("Create", t, func() {
 		c := make(MessageChan)
@@ -23,7 +33,7 @@ func TestMemoryFacility(t *testing.T) {
 		f := NewFacility("test", p)
 		message := []byte("testmessage")
 		Convey("Subscribe", func() {
-			m := f.Subscribe()
+			m := f.Get()
 			Convey("Broadcast", func() {
 				c <- message
 				Convey("The message should be recieved", func() {
@@ -45,7 +55,7 @@ func TestMemoryFacility(t *testing.T) {
 				})
 			})
 			Convey("Unsubscribe", func() {
-				f.Unsubscibe(m)
+				f.Remove(m)
 				t := time.NewTimer(timeout)
 				timedOut := false
 				select {

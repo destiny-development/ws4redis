@@ -41,8 +41,6 @@ var (
 	defaultFacility     string
 	clientTimeOut       time.Duration
 	maxEchoSize         int64
-
-	staticFacilities = make(map[string]bool)
 )
 
 var upgrader = websocket.Upgrader{
@@ -68,44 +66,27 @@ type Clients map[MessageChan]bool
 // Application contains main logic
 type Application struct {
 	facilities Facilities
-	l          sync.Locker // facilities lock
+	access     sync.Locker // facilities lock
 	mux        *http.ServeMux
 	listenOn   string
 	rate       *ratecounter.RateCounter
 }
 
-// Lock facilities list
-func (a Application) Lock() {
-	a.l.Lock()
-}
-
-// Unlock facilities list
-func (a Application) Unlock() {
-	a.l.Unlock()
-}
-
 // Facility creates, initializes and returns new facility with provided name
 func (a *Application) Facility(name string) (f *Facility) {
-	// lock only in non-strict mode
-	if !strictMode {
-		a.Lock()
-		defer a.Unlock()
-	}
+	a.access.Lock()
 	f, ok := a.facilities[name]
-	if ok {
-		return f
+	if !ok {
+		f = NewRedisFacility(name)
+		a.facilities[name] = f
 	}
-	f = NewRedisFacility(name)
-	a.facilities[name] = f
+	a.access.Unlock()
 	return f
 }
 
 // FacilityFromURL wraps Application.Facility
 func (a *Application) FacilityFromURL(u *url.URL) (f *Facility) {
 	name := u.Path[strings.LastIndex(u.Path, "/")+1:]
-	if strictMode && !staticFacilities[name] {
-		name = defaultFacility
-	}
 	return a.Facility(name)
 }
 
@@ -128,31 +109,38 @@ func must(err error) {
 }
 
 func (a Application) handler(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
 	defer func() {
-		recover()
+		if rec := recover(); rec != nil {
+			log.Println("recovered:", rec)
+		}
 	}()
+	conn, err := upgrader.Upgrade(w, r, nil)
 	must(err)
-	defer conn.Close()
+	defer func() {
+		must(conn.Close())
+	}()
 	conn.SetReadLimit(maxEchoSize)
 	a.rate.Incr(1)
 
 	// log.Println("connected", r.RemoteAddr, r.URL)
 	f := a.FacilityFromURL(r.URL)
-	c := f.Subscribe()
-	defer f.Unsubscibe(c)
+	c := f.Get()
+	defer f.Remove(c)
 
 	// listening for data from redis
 	go func() {
 		for message := range c {
-			conn.WriteMessage(websocket.TextMessage, message)
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				log.Println("write:", err)
+			}
 		}
 	}()
 
 	// handling heartbeat
-	// listening until conn timedout/error/closed or heatbeat timeout
+	// listening until conn timed-out/error/closed or heartbeat timeout
 	for {
-		conn.SetReadDeadline(time.Now().Add(clientTimeOut))
+		deadline := time.Now().Add(clientTimeOut)
+		must(conn.SetReadDeadline(deadline))
 		t, rd, err := conn.NextReader()
 		must(err)
 		if t != websocket.TextMessage {
@@ -198,23 +186,7 @@ func New() *Application {
 	a.rate = ratecounter.NewRateCounter(time.Second)
 	mux := http.NewServeMux()
 	a.facilities = make(Facilities)
-	a.l = new(sync.Mutex)
-
-	// pre-initialize facilities in strict mode
-	if strictMode {
-		facilities := strings.Split(permittedFacilities, ",")
-		for _, name := range facilities {
-			staticFacilities[name] = true
-			a.Facility(name)
-		}
-		if !staticFacilities[defaultFacility] {
-			log.Fatalln("default facility", defaultFacility, "not in", permittedFacilities)
-		}
-	}
-
-	if scaleCPU {
-		runtime.GOMAXPROCS(runtime.NumCPU())
-	}
+	a.access = new(sync.Mutex)
 
 	mux.Handle("/debug/vars", http.DefaultServeMux)
 	mux.HandleFunc("/", a.handler)
@@ -247,11 +219,11 @@ func init() {
 	flag.StringVar(&redisNetwork, "redis-network", "tcp", "Redis network")
 	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis addr")
 	flag.StringVar(&redisPrefix, "redis-prefix", "ws", "Redis prefix")
-	flag.BoolVar(&strictMode, "strict", false, "Allow only white-listed facilities")
+	flag.BoolVar(&strictMode, "strict", false, "Allow only white-listed facilities DEPRECATED")
 	flag.StringVar(&permittedFacilities, "facilities", "launcher,launcher-staff", "Permitted facilities for strict mode")
 	flag.StringVar(&defaultFacility, "default", "launcher", "Default facility")
 	flag.BoolVar(&heartbeats, "heartbeats", false, "Use heartbeats")
-	flag.BoolVar(&scaleCPU, "scale", false, "Use all cpus")
+	flag.BoolVar(&scaleCPU, "scale", false, "Use all cpus DEPRECATED")
 	flag.DurationVar(&clientTimeOut, "timeout", time.Second*10, "Heartbeat timeout")
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
 }

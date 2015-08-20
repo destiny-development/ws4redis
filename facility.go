@@ -14,16 +14,6 @@ type MessageProvider interface {
 	Channel() MessageChan
 }
 
-// MemoryMessageProvider uses channels for source of messages
-type MemoryMessageProvider struct {
-	Messages MessageChan
-}
-
-// Channel returns MessageChan
-func (p MemoryMessageProvider) Channel() MessageChan {
-	return p.Messages
-}
-
 // RedisMessageProvider implements MessageProvider
 type RedisMessageProvider struct {
 	conn     redis.PubSubConn
@@ -55,7 +45,9 @@ func (p RedisMessageProvider) loop() {
 		case redis.Message:
 			p.messages <- v.Data
 		case error:
-			p.connect()
+			if err := p.connect(); err != nil {
+				log.Println("RedisMessageProvider.loop: connect", err)
+			}
 			time.Sleep(attemptWait)
 		}
 	}
@@ -84,18 +76,8 @@ type Facility struct {
 	name     string      // name of facility
 	channel  MessageChan // broadcast channel
 	clients  Clients     // client channels
-	l        sync.Locker // lock for clients
+	access   sync.Locker // lock for clients
 	provider MessageProvider
-}
-
-// Lock clients list
-func (f Facility) Lock() {
-	f.l.Lock()
-}
-
-// Unlock clients list
-func (f Facility) Unlock() {
-	f.l.Unlock()
 }
 
 // NewFacility creates facility, starts redis and broadcast loops
@@ -104,7 +86,7 @@ func NewFacility(name string, provider MessageProvider) *Facility {
 	f := new(Facility)
 	f.channel = provider.Channel()
 	f.clients = make(Clients)
-	f.l = new(sync.Mutex)
+	f.access = new(sync.Mutex)
 	f.name = name
 	go f.loop()
 	return f
@@ -124,28 +106,28 @@ func (f *Facility) loop() {
 		log.Printf("[%s] broadcasting", f.name)
 		// async broadcast to all clients of facility
 		// locking changes to client list
-		f.Lock()
+		f.access.Lock()
 		for client := range f.clients {
 			client <- s
 		}
-		f.Unlock()
+		f.access.Unlock()
 	}
 }
 
-// Subscribe creates new subscription channel and returns it
+// Get creates new subscription channel and returns it
 // adding it to facility clients
-func (f *Facility) Subscribe() (m MessageChan) {
+func (f *Facility) Get() (m MessageChan) {
 	m = make(MessageChan)
-	f.Lock()
+	f.access.Lock()
 	f.clients[m] = true
-	f.Unlock()
+	f.access.Unlock()
 	return m
 }
 
-// Unsubscibe removes channel from facility clients and closes it
-func (f *Facility) Unsubscibe(m MessageChan) {
-	f.Lock()
+// Remove removes channel from facility clients and closes it
+func (f *Facility) Remove(m MessageChan) {
+	f.access.Lock()
 	delete(f.clients, m)
-	f.Unlock()
+	f.access.Unlock()
 	close(m)
 }

@@ -132,37 +132,6 @@ func TestApplication(t *testing.T) {
 	})
 }
 
-func TestApplicationStrict(t *testing.T) {
-	strictMode = true
-	Convey("Create", t, func() {
-		app := New()
-		// So(app, ShouldNotBeNil)
-		Convey("Get ok facility", func() {
-			u, _ := url.Parse("/ws/launcher?asdsadas")
-			f := app.FacilityFromURL(u)
-			So(f, ShouldNotBeNil)
-			So(f.name, ShouldEqual, "launcher")
-		})
-		Convey("Get forbidden", func() {
-			u, _ := url.Parse("/ws/forbidden?test")
-			f := app.FacilityFromURL(u)
-			So(f, ShouldNotBeNil)
-			So(f.name, ShouldEqual, "launcher")
-		})
-		Convey("Stat handler", func() {
-			s := newServer(t, app)
-			defer s.Close()
-			res, err := http.Get(s.URL + "/stat")
-			So(err, ShouldBeNil)
-			So(res.StatusCode, ShouldEqual, http.StatusOK)
-			b, err := ioutil.ReadAll(res.Body)
-			So(err, ShouldBeNil)
-			So(string(b), ShouldContainSubstring, version)
-			So(string(b), ShouldContainSubstring, "ws4redis")
-		})
-	})
-}
-
 func TestApplicationViaGet(t *testing.T) {
 	strictMode = true
 	Convey("Create", t, func() {
@@ -178,7 +147,8 @@ func TestApplicationViaGet(t *testing.T) {
 			u, _ := url.Parse("/ws/forbidden?test")
 			f := app.FacilityFromURL(u)
 			So(f, ShouldNotBeNil)
-			So(f.name, ShouldEqual, "launcher")
+			// strict mode deprecation
+			So(f.name, ShouldEqual, "forbidden")
 		})
 		Convey("Stat handler", func() {
 			s := newServer(t, app)
