@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"expvar"
@@ -19,7 +21,7 @@ import (
 )
 
 const (
-	version        = "1.5.5-production"
+	version        = "1.7-production"
 	facilityPrefix = "broadcast"
 	keySeparator   = ":"
 	attemptWait    = time.Second * 1
@@ -111,6 +113,30 @@ func must(err error) {
 func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
+			if rec == io.EOF {
+				// ignoring EOF errors, they are expected
+				return
+			}
+			if err, ok := rec.(error); ok {
+				// ignoring unexpected EOF errors
+				// they are expected, when connection closed by client
+				if strings.Contains(err.Error(), "unexpected EOF") {
+					return
+				}
+				// ignoring client-side errors
+				if strings.Contains(err.Error(), "could not find upgrade header") {
+					return
+				}
+				if strings.Contains(err.Error(), "version != 13") {
+					return
+				}
+				if strings.Contains(err.Error(), "close 1005") {
+					return
+				}
+				if strings.Contains(err.Error(), "i/o timeout") {
+					return
+				}
+			}
 			log.Println("recovered:", rec)
 		}
 	}()
@@ -153,6 +179,15 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+
+func (a Application) muninEndpoint(w http.ResponseWriter, r *http.Request) {
+	var totalClients int
+	for _, f := range a.facilities {
+		totalClients += len(f.clients)
+	}
+	fmt.Fprint(w, totalClients)
+}
+
 // statistics information
 func (a Application) stat(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "ws4redis")
@@ -191,6 +226,7 @@ func New() *Application {
 	mux.Handle("/debug/vars", http.DefaultServeMux)
 	mux.HandleFunc("/", a.handler)
 	mux.HandleFunc("/stat", a.stat)
+	mux.HandleFunc("/monitoring_endpoint/", a.muninEndpoint)
 	listenOn := fmt.Sprintf("%s:%d", host, port)
 
 	// print information about modes/version
@@ -222,7 +258,7 @@ func init() {
 	flag.BoolVar(&strictMode, "strict", false, "Allow only white-listed facilities DEPRECATED")
 	flag.StringVar(&permittedFacilities, "facilities", "launcher,launcher-staff", "Permitted facilities for strict mode")
 	flag.StringVar(&defaultFacility, "default", "launcher", "Default facility")
-	flag.BoolVar(&heartbeats, "heartbeats", false, "Use heartbeats")
+	flag.BoolVar(&heartbeats, "heartbeats", false, "Use heartbeats DEPRECATED")
 	flag.BoolVar(&scaleCPU, "scale", false, "Use all cpus DEPRECATED")
 	flag.DurationVar(&clientTimeOut, "timeout", time.Second*10, "Heartbeat timeout")
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
@@ -232,18 +268,21 @@ func getApplication() *Application {
 	a := New()
 	fmt.Println("ws4redis", version)
 	fmt.Println("listening on", a.listenOn)
-	if !scaleCPU {
-		fmt.Println("warning: using one core")
-	}
-	if !strictMode {
-		fmt.Println("warning: running in unstrict mode")
-	} else {
-		fmt.Println("running in strict mode; allowed facilities:", permittedFacilities)
-	}
+	fmt.Println("running in unstrict scaling mode with heartbeats")
 	return a
 }
 
+func printLimits() {
+	var rLimit syscall.Rlimit
+	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	if err != nil {
+		fmt.Println("Error Getting Rlimit ", err)
+	}
+	fmt.Println("File limit:", rLimit.Cur, "of", rLimit.Max)
+}
+
 func main() {
+	printLimits()
 	flag.Parse()
 	a := getApplication()
 	expvar.Publish("Clients", expvar.Func(a.clients))
