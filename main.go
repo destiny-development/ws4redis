@@ -273,7 +273,7 @@ func New() *Application {
 		mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
 		mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
 		mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-		mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+		// mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
 	}
 
 	mux.Handle("/debug/vars", http.DefaultServeMux)
