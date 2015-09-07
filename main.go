@@ -1,35 +1,48 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"expvar"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
-
+	"os"
 	"runtime"
+	rpprof "runtime/pprof"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"expvar"
-
 	"github.com/gorilla/websocket"
 	"github.com/paulbellamy/ratecounter"
+	"strconv"
+	"github.com/syndtr/goleveldb/leveldb/errors"
+	"bufio"
 )
 
 const (
-	version        = "1.7-production"
-	facilityPrefix = "broadcast"
-	keySeparator   = ":"
-	attemptWait    = time.Second * 1
+	version              = "1.9-production"
+	secureFacilityPrefix = "secure"
+	keySeparator         = ":"
+	attemptWait          = time.Second * 1
+	heartbeatMessage     = "ping"
+	facilityPrefix       = "broadcast"
 )
 
 var (
 	port int
 	host string
+
+	// debug flags
+	profileCPU bool
+	profile    bool
 
 	redisAddr     string
 	redisDatabase int64
@@ -41,8 +54,14 @@ var (
 	scaleCPU            bool
 	permittedFacilities string
 	defaultFacility     string
+	secret              []byte
+	secretFilePath string
 	clientTimeOut       time.Duration
+	timeStampDelta      time.Duration
 	maxEchoSize         int64
+	heartbeat           = bytes.NewBufferString(heartbeatMessage).Bytes()
+
+	errTokenIncorrect = errors.New("Error: token incorrect")
 )
 
 var upgrader = websocket.Upgrader{
@@ -86,10 +105,44 @@ func (a *Application) Facility(name string) (f *Facility) {
 	return f
 }
 
+func tokenCorrect(name string, u *url.URL, deadline time.Time) bool {
+	q := u.Query()
+	token := q.Get("token")
+	timestampS := q.Get("ts")
+	timestamp, err := strconv.ParseInt(timestampS, 10, 64)
+	if err != nil {
+		log.Println("warning:", "unable to convert timestamp")
+		return false
+	}
+	tokenTime := time.Unix(timestamp, 0)
+	delta := deadline.Sub(tokenTime)
+	if delta > timeStampDelta || delta < 0 {
+		log.Println("warning: bad timestamp")
+		return false
+	}
+
+	hash := sha256.New()
+	hash.Write(secret)
+	fmt.Fprint(hash, name, timestampS)
+	expectedToken := fmt.Sprintf("%x", hash.Sum(nil))
+	if expectedToken != token {
+		log.Println("warning: unexpected token", token, "should be", expectedToken)
+		return false
+	}
+
+	return true
+}
+
 // FacilityFromURL wraps Application.Facility
-func (a *Application) FacilityFromURL(u *url.URL) (f *Facility) {
+func (a *Application) FacilityFromURL(u *url.URL) (f *Facility, err error) {
 	name := u.Path[strings.LastIndex(u.Path, "/")+1:]
-	return a.Facility(name)
+	if strings.Index(name, secureFacilityPrefix) == 0 {
+		// checking secure facility
+		if !tokenCorrect(name, u, time.Now().Add(-timeStampDelta)) {
+			return nil, errTokenIncorrect
+		}
+	}
+	return a.Facility(name), nil
 }
 
 func (a Application) clients() interface{} {
@@ -104,12 +157,6 @@ func (a Application) requestsPerSecond() interface{} {
 	return a.rate.Rate()
 }
 
-func must(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
 func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -117,39 +164,32 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 				// ignoring EOF errors, they are expected
 				return
 			}
-			if err, ok := rec.(error); ok {
-				// ignoring unexpected EOF errors
-				// they are expected, when connection closed by client
-				if strings.Contains(err.Error(), "unexpected EOF") {
-					return
-				}
-				// ignoring client-side errors
-				if strings.Contains(err.Error(), "could not find upgrade header") {
-					return
-				}
-				if strings.Contains(err.Error(), "version != 13") {
-					return
-				}
-				if strings.Contains(err.Error(), "close 1005") {
-					return
-				}
-				if strings.Contains(err.Error(), "i/o timeout") {
-					return
-				}
-			}
 			log.Println("recovered:", rec)
 		}
 	}()
-	conn, err := upgrader.Upgrade(w, r, nil)
-	must(err)
-	defer func() {
-		must(conn.Close())
-	}()
-	conn.SetReadLimit(maxEchoSize)
-	a.rate.Incr(1)
 
 	// log.Println("connected", r.RemoteAddr, r.URL)
-	f := a.FacilityFromURL(r.URL)
+	f, err := a.FacilityFromURL(r.URL)
+	if err != nil {
+		fmt.Fprintln(w, "Error: Permission denied")
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		// failed to upgrade connection to ws protocol
+		fmt.Fprintln(w, "Error: Failed to upgrade")
+		return
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			log.Println("conn.Close:", err)
+		}
+	}()
+	conn.SetReadLimit(maxEchoSize)
+
+	a.rate.Incr(1)
 	c := f.Get()
 	defer f.Remove(c)
 
@@ -157,7 +197,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		for message := range c {
 			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Println("write:", err)
+				break
 			}
 		}
 	}()
@@ -166,19 +206,24 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	// listening until conn timed-out/error/closed or heartbeat timeout
 	for {
 		deadline := time.Now().Add(clientTimeOut)
-		must(conn.SetReadDeadline(deadline))
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			break
+		}
 		t, rd, err := conn.NextReader()
-		must(err)
+		if err != nil {
+			break
+		}
+		if _, err := io.Copy(ioutil.Discard, rd); err != nil {
+			break
+		}
 		if t != websocket.TextMessage {
 			continue
 		}
-		wr, err := conn.NextWriter(t)
-		_, err = io.Copy(wr, rd)
-		must(err)
-		must(wr.Close())
+		if err := conn.WriteMessage(websocket.TextMessage, heartbeat); err != nil {
+			break
+		}
 	}
 }
-
 
 func (a Application) muninEndpoint(w http.ResponseWriter, r *http.Request) {
 	var totalClients int
@@ -223,13 +268,20 @@ func New() *Application {
 	a.facilities = make(Facilities)
 	a.access = new(sync.Mutex)
 
+	if profile {
+		mux.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
+		mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
+		mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+		mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+		mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+	}
+
 	mux.Handle("/debug/vars", http.DefaultServeMux)
 	mux.HandleFunc("/", a.handler)
 	mux.HandleFunc("/stat", a.stat)
 	mux.HandleFunc("/monitoring_endpoint/", a.muninEndpoint)
 	listenOn := fmt.Sprintf("%s:%d", host, port)
 
-	// print information about modes/version
 	a.mux = mux
 	a.listenOn = listenOn
 	return a
@@ -262,6 +314,10 @@ func init() {
 	flag.BoolVar(&scaleCPU, "scale", false, "Use all cpus DEPRECATED")
 	flag.DurationVar(&clientTimeOut, "timeout", time.Second*10, "Heartbeat timeout")
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
+	flag.BoolVar(&profileCPU, "profile-cpu", false, "Profile cpu")
+	flag.BoolVar(&profile, "profile", true, "Profile with pprof endpoint")
+	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute, "Maximum timestamp delta")
+	flag.StringVar(&secretFilePath, "secret", "secret", "Filepath to text file with secret phrase")
 }
 
 func getApplication() *Application {
@@ -284,6 +340,23 @@ func printLimits() {
 func main() {
 	printLimits()
 	flag.Parse()
+	if profileCPU {
+		f, err := os.Create("ws4redis-cpu.prof")
+		if err != nil {
+			log.Fatal(err)
+		}
+		rpprof.StartCPUProfile(f)
+		defer rpprof.StopCPUProfile()
+	}
+	f, err := os.Open(secretFilePath)
+	if err != nil {
+		log.Fatalln("unable to open secret file", err)
+	}
+	secret, _, err = bufio.NewReader(f).ReadLine()
+	if err != nil {
+		log.Fatalln("unable to read secret", err)
+	}
+	f.Close()
 	a := getApplication()
 	expvar.Publish("Clients", expvar.Func(a.clients))
 	expvar.Publish("Goroutines", expvar.Func(goroutines))

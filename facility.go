@@ -111,6 +111,7 @@ func (f *Facility) loop() {
 			client <- s
 		}
 		f.access.Unlock()
+		log.Printf("[%s] broadcasted", f.name)
 	}
 }
 

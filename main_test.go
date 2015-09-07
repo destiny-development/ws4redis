@@ -12,6 +12,8 @@ import (
 	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/websocket"
 	. "github.com/smartystreets/goconvey/convey"
+	"log"
+	"bytes"
 )
 
 type Server struct {
@@ -36,6 +38,21 @@ func sendRecv(t *testing.T, ws *websocket.Conn) {
 	_, p, err := ws.ReadMessage()
 	So(err, ShouldBeNil)
 	So(string(p), ShouldEqual, message)
+}
+
+func TestSecureTokens(t *testing.T) {
+	Convey("Secure tokens", t, func() {
+		secret = bytes.NewBufferString("secret").Bytes()
+		u, err := url.Parse("ws://ws.tera-online.ru/ws/secure-user-1")
+		ts := time.Unix(1441634853, 0)
+		So(err, ShouldBeNil)
+		q := u.Query()
+		q.Add("token", "74d96668e05a0b0ea1f71009a5898f2c87ea3faf2c98bf91f02431fcb86a47d9")
+		q.Add("ts", "1441634853")
+		u.RawQuery = q.Encode()
+		log.Println(u)
+		So(tokenCorrect("secure-user-1", u, ts.Add(time.Second)), ShouldBeTrue)
+	})
 }
 
 func TestDialConvey(t *testing.T) {
@@ -92,7 +109,7 @@ func TestApplication(t *testing.T) {
 		})
 		Convey("Get facility from url", func() {
 			u, _ := url.Parse("/ws/test?kek")
-			f := app.FacilityFromURL(u)
+			f, _ := app.FacilityFromURL(u)
 			So(f, ShouldNotBeNil)
 			So(f.name, ShouldEqual, "test")
 		})
@@ -139,13 +156,15 @@ func TestApplicationViaGet(t *testing.T) {
 		// So(app, ShouldNotBeNil)
 		Convey("Get ok facility", func() {
 			u, _ := url.Parse("/ws/launcher?asdsadas")
-			f := app.FacilityFromURL(u)
+			f, err := app.FacilityFromURL(u)
+			So(err, ShouldBeNil)
 			So(f, ShouldNotBeNil)
 			So(f.name, ShouldEqual, "launcher")
 		})
 		Convey("Get forbidden", func() {
 			u, _ := url.Parse("/ws/forbidden?test")
-			f := app.FacilityFromURL(u)
+			f, err := app.FacilityFromURL(u)
+			So(err, ShouldBeNil)
 			So(f, ShouldNotBeNil)
 			// strict mode deprecation
 			So(f.name, ShouldEqual, "forbidden")
