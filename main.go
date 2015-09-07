@@ -317,7 +317,7 @@ func init() {
 	flag.BoolVar(&profileCPU, "profile-cpu", false, "Profile cpu")
 	flag.BoolVar(&profile, "profile", true, "Profile with pprof endpoint")
 	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute, "Maximum timestamp delta")
-	flag.StringVar(&secretFilePath, "secret", "secret", "Filepath to text file with secret phrase")
+	flag.StringVar(&secretFilePath, "secret", "/home/tera/ws4redis/secret", "Filepath to text file with secret phrase")
 }
 
 func getApplication() *Application {

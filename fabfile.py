@@ -17,6 +17,9 @@ def live():
     if not confirm(red("Are you going to deploy on LIVE?"), default=False):
         abort('Aborted by request.')
 
+def status():
+    run('curl localhost:9050')
+
 def build():
     local('go test .')
     local('go build .')
