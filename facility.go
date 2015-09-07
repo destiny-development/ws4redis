@@ -32,6 +32,7 @@ func (p *RedisMessageProvider) connect() error {
 		return err
 	}
 	psc := redis.PubSubConn{Conn: conn}
+	log.Println(redisAddr, redisDatabase, p.key)
 	if err := psc.Subscribe(p.key); err != nil {
 		return err
 	}

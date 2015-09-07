@@ -111,13 +111,19 @@ func tokenCorrect(name string, u *url.URL, deadline time.Time) bool {
 	timestampS := q.Get("ts")
 	timestamp, err := strconv.ParseInt(timestampS, 10, 64)
 	if err != nil {
-		log.Println("warning:", "unable to convert timestamp")
+		// log.Println("warning:", "unable to convert timestamp")
 		return false
 	}
+
 	tokenTime := time.Unix(timestamp, 0)
 	delta := deadline.Sub(tokenTime)
-	if delta > timeStampDelta || delta < 0 {
-		log.Println("warning: bad timestamp")
+	if delta < 0 {
+		delta *= -1
+	}
+
+	// log.Println(tokenTime.Unix(), time.Now().Unix(), deadline.Unix())
+	if delta > timeStampDelta {
+		log.Println("warning: bad delta", tokenTime.Unix(), time.Now().Unix(), deadline.Unix())
 		return false
 	}
 
@@ -126,7 +132,7 @@ func tokenCorrect(name string, u *url.URL, deadline time.Time) bool {
 	fmt.Fprint(hash, name, timestampS)
 	expectedToken := fmt.Sprintf("%x", hash.Sum(nil))
 	if expectedToken != token {
-		log.Println("warning: unexpected token", token, "should be", expectedToken)
+		// log.Println("warning: unexpected token", token, "should be", expectedToken)
 		return false
 	}
 
@@ -171,8 +177,8 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	// log.Println("connected", r.RemoteAddr, r.URL)
 	f, err := a.FacilityFromURL(r.URL)
 	if err != nil {
-		fmt.Fprintln(w, "Error: Permission denied")
 		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintln(w, "Error: Permission denied")
 		return
 	}
 
@@ -316,7 +322,7 @@ func init() {
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
 	flag.BoolVar(&profileCPU, "profile-cpu", false, "Profile cpu")
 	flag.BoolVar(&profile, "profile", true, "Profile with pprof endpoint")
-	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute, "Maximum timestamp delta")
+	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute * 10, "Maximum timestamp delta")
 	flag.StringVar(&secretFilePath, "secret", "/home/tera/ws4redis/secret", "Filepath to text file with secret phrase")
 }
 
