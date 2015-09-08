@@ -9,6 +9,10 @@ import (
 	"github.com/garyburd/redigo/redis"
 )
 
+const (
+	messagesChanSize = 10
+)
+
 // MessageProvider is source of messages
 type MessageProvider interface {
 	Channel() MessageChan
@@ -19,6 +23,128 @@ type RedisMessageProvider struct {
 	conn     redis.PubSubConn
 	key      string
 	messages MessageChan
+}
+
+type RedisFactory struct {
+	conn       redis.PubSubConn
+	key        string
+	messages   map[string]MessageChan
+	facilities Facilities
+	access     sync.Locker // lock for clients
+}
+
+func NewRedisFactory() (*RedisFactory, error) {
+	f := new(RedisFactory)
+	if err := f.connect(); err != nil {
+		return nil, err
+	}
+	f.access = new(sync.Mutex)
+	f.messages = make(map[string]MessageChan)
+	f.facilities = make(Facilities)
+
+	go f.loop()
+	go f.gc()
+
+	return f, nil
+}
+
+func (f *RedisFactory) connect() error {
+	conn, err := redis.Dial(redisNetwork, redisAddr)
+	if err != nil {
+		return err
+	}
+	// selecting database
+	_, err = conn.Do("select", redisDatabase)
+	if err != nil {
+		return err
+	}
+	psc := redis.PubSubConn{Conn: conn}
+	log.Println(redisNetwork, redisAddr, redisDatabase)
+	f.conn = psc
+	return nil
+}
+
+func (p *RedisFactory) Facility(name string) *Facility {
+	p.access.Lock()
+	facility, ok := p.facilities[name]
+	if !ok {
+		key := getFacilityKey(name)
+		log.Println("listening", key)
+		if err := p.conn.Subscribe(key); err != nil {
+			panic(err)
+		}
+		messages := make(chan Message, messagesChanSize)
+		facility = new(Facility)
+		facility.channel = messages
+		facility.clients = make(Clients)
+		facility.access = new(sync.Mutex)
+		facility.name = name
+		p.messages[key] = messages
+		go facility.loop()
+		p.facilities[name] = facility
+	}
+	p.access.Unlock()
+	return facility
+}
+
+const (
+	gcTime = time.Second
+)
+
+func (p RedisFactory) gc() {
+	ticker := time.NewTicker(gcTime)
+	for _ = range ticker.C {
+		p.access.Lock()
+		for _, f := range p.facilities {
+			if len(f.clients) == 0 {
+				p.Remove(f.name)
+			}
+		}
+		p.access.Unlock()
+	}
+}
+
+func (p RedisFactory) loop() {
+	for {
+		switch v := p.conn.Receive().(type) {
+		case redis.Message:
+			log.Println(v.Channel, v.Data)
+			messages, ok := p.messages[v.Channel]
+			if !ok {
+				log.Println(v.Channel, "not found in channels")
+				continue
+			}
+			messages <- v.Data
+		case error:
+			if err := p.connect(); err != nil {
+				log.Println("RedisMessageProvider.loop: connect", err)
+			}
+			time.Sleep(attemptWait)
+		}
+	}
+}
+
+func (p *RedisFactory) Remove(name string) {
+	key := getFacilityKey(name)
+	delete(p.facilities, name)
+	delete(p.messages, key)
+	p.conn.Unsubscribe(key)
+}
+
+func (p *RedisFactory) RemoveClient(f *Facility, c MessageChan) {
+	f.access.Lock()
+	p.access.Lock()
+	delete(f.clients, c)
+	close(c)
+	if len(f.clients) == 0 {
+		p.Remove(f.name)
+	}
+	p.access.Unlock()
+	f.access.Unlock()
+}
+
+func getFacilityKey(name string) string {
+	return strings.Join([]string{redisPrefix, facilityPrefix, name}, keySeparator)
 }
 
 func (p *RedisMessageProvider) connect() error {
@@ -100,6 +226,7 @@ func NewRedisFacility(name string) *Facility {
 	return NewFacility(name, provider)
 }
 
+
 // broadcast loop
 func (f *Facility) loop() {
 	// for every message in channel
@@ -119,6 +246,9 @@ func (f *Facility) loop() {
 // Get creates new subscription channel and returns it
 // adding it to facility clients
 func (f *Facility) Get() (m MessageChan) {
+	if f == nil {
+		panic("facility is nil")
+	}
 	m = make(MessageChan)
 	f.access.Lock()
 	f.clients[m] = true

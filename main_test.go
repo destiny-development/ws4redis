@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
+	"log"
+
 	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/websocket"
 	. "github.com/smartystreets/goconvey/convey"
-	"log"
-	"bytes"
 )
 
 type Server struct {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"expvar"
 	"flag"
 	"fmt"
@@ -20,15 +21,15 @@ import (
 	"syscall"
 	"time"
 
+	"bufio"
+	"strconv"
+
 	"github.com/gorilla/websocket"
 	"github.com/paulbellamy/ratecounter"
-	"strconv"
-	"github.com/syndtr/goleveldb/leveldb/errors"
-	"bufio"
 )
 
 const (
-	version              = "1.9-production"
+	version              = "2.1-stable"
 	secureFacilityPrefix = "secure"
 	keySeparator         = ":"
 	attemptWait          = time.Second * 1
@@ -55,7 +56,7 @@ var (
 	permittedFacilities string
 	defaultFacility     string
 	secret              []byte
-	secretFilePath string
+	secretFilePath      string
 	clientTimeOut       time.Duration
 	timeStampDelta      time.Duration
 	maxEchoSize         int64
@@ -86,23 +87,16 @@ type Clients map[MessageChan]bool
 
 // Application contains main logic
 type Application struct {
-	facilities Facilities
-	access     sync.Locker // facilities lock
-	mux        *http.ServeMux
-	listenOn   string
-	rate       *ratecounter.RateCounter
+	factory  *RedisFactory
+	access   sync.Locker // facilities lock
+	mux      *http.ServeMux
+	listenOn string
+	rate     *ratecounter.RateCounter
 }
 
 // Facility creates, initializes and returns new facility with provided name
 func (a *Application) Facility(name string) (f *Facility) {
-	a.access.Lock()
-	f, ok := a.facilities[name]
-	if !ok {
-		f = NewRedisFacility(name)
-		a.facilities[name] = f
-	}
-	a.access.Unlock()
-	return f
+	return a.factory.Facility(name)
 }
 
 func tokenCorrect(name string, u *url.URL, deadline time.Time) bool {
@@ -153,7 +147,7 @@ func (a *Application) FacilityFromURL(u *url.URL) (f *Facility, err error) {
 
 func (a Application) clients() interface{} {
 	var totalClients int64
-	for _, f := range a.facilities {
+	for _, f := range a.factory.facilities {
 		totalClients += int64(len(f.clients))
 	}
 	return totalClients
@@ -175,6 +169,13 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// log.Println("connected", r.RemoteAddr, r.URL)
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		// failed to upgrade connection to ws protocol
+		fmt.Fprintln(w, "Error: Failed to upgrade")
+		return
+	}
+
 	f, err := a.FacilityFromURL(r.URL)
 	if err != nil {
 		w.WriteHeader(http.StatusForbidden)
@@ -182,12 +183,6 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		// failed to upgrade connection to ws protocol
-		fmt.Fprintln(w, "Error: Failed to upgrade")
-		return
-	}
 	defer func() {
 		if err := conn.Close(); err != nil {
 			log.Println("conn.Close:", err)
@@ -197,7 +192,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 
 	a.rate.Incr(1)
 	c := f.Get()
-	defer f.Remove(c)
+	defer a.factory.RemoveClient(f, c)
 
 	// listening for data from redis
 	go func() {
@@ -233,7 +228,7 @@ func (a Application) handler(w http.ResponseWriter, r *http.Request) {
 
 func (a Application) muninEndpoint(w http.ResponseWriter, r *http.Request) {
 	var totalClients int
-	for _, f := range a.facilities {
+	for _, f := range a.factory.facilities {
 		totalClients += len(f.clients)
 	}
 	fmt.Fprint(w, totalClients)
@@ -244,9 +239,9 @@ func (a Application) stat(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "ws4redis")
 	fmt.Fprintln(w, "Version", version)
 
-	fmt.Fprintln(w, "Facilities", len(a.facilities))
+	fmt.Fprintln(w, "Facilities", len(a.factory.facilities))
 	var totalClients int64
-	for name, f := range a.facilities {
+	for name, f := range a.factory.facilities {
 		fmt.Fprintf(w, "\tfacility %s:\n", name)
 		clients := len(f.clients)
 		fmt.Fprintf(w, "\t\t %d clients\n", clients)
@@ -271,7 +266,11 @@ func New() *Application {
 	a := new(Application)
 	a.rate = ratecounter.NewRateCounter(time.Second)
 	mux := http.NewServeMux()
-	a.facilities = make(Facilities)
+	factory, err := NewRedisFactory()
+	if err != nil {
+		panic(err)
+	}
+	a.factory = factory
 	a.access = new(sync.Mutex)
 
 	if profile {
@@ -322,7 +321,7 @@ func init() {
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
 	flag.BoolVar(&profileCPU, "profile-cpu", false, "Profile cpu")
 	flag.BoolVar(&profile, "profile", true, "Profile with pprof endpoint")
-	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute * 10, "Maximum timestamp delta")
+	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute*10, "Maximum timestamp delta")
 	flag.StringVar(&secretFilePath, "secret", "/home/tera/ws4redis/secret", "Filepath to text file with secret phrase")
 }
 
