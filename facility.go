@@ -138,6 +138,7 @@ func (p *RedisFactory) RemoveClient(f *Facility, c MessageChan) {
 	close(c)
 	if len(f.clients) == 0 {
 		p.Remove(f.name)
+		close(f.channel)
 	}
 	p.access.Unlock()
 	f.access.Unlock()

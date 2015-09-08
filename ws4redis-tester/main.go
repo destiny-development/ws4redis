@@ -1,12 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
-	"net/http"
-
-	"bytes"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"

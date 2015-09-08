@@ -320,7 +320,7 @@ func init() {
 	flag.DurationVar(&clientTimeOut, "timeout", time.Second*10, "Heartbeat timeout")
 	flag.Int64Var(&maxEchoSize, "max-size", 32, "Maximum message size")
 	flag.BoolVar(&profileCPU, "profile-cpu", false, "Profile cpu")
-	flag.BoolVar(&profile, "profile", true, "Profile with pprof endpoint")
+	flag.BoolVar(&profile, "profile", false, "Profile with pprof endpoint")
 	flag.DurationVar(&timeStampDelta, "timestamp-delta", time.Minute*10, "Maximum timestamp delta")
 	flag.StringVar(&secretFilePath, "secret", "/home/tera/ws4redis/secret", "Filepath to text file with secret phrase")
 }
