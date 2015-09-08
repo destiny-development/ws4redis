@@ -226,7 +226,6 @@ func NewRedisFacility(name string) *Facility {
 	return NewFacility(name, provider)
 }
 
-
 // broadcast loop
 func (f *Facility) loop() {
 	// for every message in channel
